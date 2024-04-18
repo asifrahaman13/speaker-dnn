@@ -4,8 +4,8 @@ import librosa
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from tensorflow.keras import layers, models
+from tensorflow.keras.models import load_model
 from fastapi import FastAPI
-import os
 import numpy as np
 from scipy.io.wavfile import read
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,8 +15,10 @@ from fastapi import UploadFile, Form
 from fastapi import FastAPI, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydub import AudioSegment
-import wave
 import os
+import librosa
+import numpy as np
+
 
 app = FastAPI()
 
@@ -35,71 +37,151 @@ app.add_middleware(
 )
 
 
-
-
-
 # Function to extract spectrogram features from audio file
 def extract_features(file_path, n_mels=128, n_fft=2048, hop_length=512):
+
+    # Load the audio file using librosa
     signal, sr = librosa.load(file_path, sr=None)
-    mel_spec = librosa.feature.melspectrogram(y=signal, sr=sr, n_fft=n_fft, hop_length=hop_length, n_mels=n_mels)
+
+    # Extract Mel spectrogram features
+    mel_spec = librosa.feature.melspectrogram(
+        y=signal, sr=sr, n_fft=n_fft, hop_length=hop_length, n_mels=n_mels
+    )
+
+    # Convert to log scale
     log_mel_spec = librosa.power_to_db(mel_spec, ref=np.max)
+
+    # Return the log Mel spectrogram features
     return log_mel_spec
 
     # Define a function to load data from the given path
+
+
 def load_data(path):
+
+    # Define a function to load data from the given path
     features = []
     labels = []
+
+    # Loop through each speaker folder
     for speaker_folder in os.listdir(path):
+
+        # Path to the speaker folder
         speaker_path = os.path.join(path, speaker_folder)
+
+        # Loop through each audio file in the speaker folder
         for audio_file in os.listdir(speaker_path):
+
+            # Path to the audio file
             file_path = os.path.join(speaker_path, audio_file)
+
+            # Extract features from the audio file
             features.append(extract_features(file_path))
+
+            # Append the speaker label
             labels.append(speaker_folder)
+
+    # Convert the lists to numpy arrays
     return np.array(features), np.array(labels)
 
-def train_model():
 
-    # Load data
-    data_path = "samples"
-    X, y = load_data(data_path)
+class SpeakerIdentificationModel:
+    def __init__(self, data_path="samples"):
+        self.data_path = data_path
+        self.model = self._build_model()
 
-    # Encode labels
-    label_encoder = LabelEncoder()
-    y_encoded = label_encoder.fit_transform(y)
+    def _build_model(self):
+        # Load data
+        X, y = load_data(self.data_path)
 
-    # Split data into training and test sets
-    X_train, X_test, y_train, y_test = train_test_split(X, y_encoded, test_size=0.2, random_state=42)
+        # Encode labels
+        label_encoder = LabelEncoder()
+        y_encoded = label_encoder.fit_transform(y)
 
-    # Add channel dimension for CNN
-    X_train = np.expand_dims(X_train, axis=-1)
-    X_test = np.expand_dims(X_test, axis=-1)
+        # Split data into training and test sets
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y_encoded, test_size=0.2, random_state=42
+        )
 
-    # Build CNN model
-    model = models.Sequential([
-        layers.Conv2D(32, (3, 3), activation='relu', input_shape=X_train[0].shape),
-        layers.MaxPooling2D((2, 2)),
-        layers.Conv2D(64, (3, 3), activation='relu'),
-        layers.MaxPooling2D((2, 2)),
-        layers.Conv2D(128, (3, 3), activation='relu'),
-        layers.MaxPooling2D((2, 2)),
-        layers.Flatten(),
-        layers.Dense(128, activation='relu'),
-        layers.Dense(len(label_encoder.classes_), activation='softmax')
-    ])
+        # Add channel dimension for CNN
+        X_train = np.expand_dims(X_train, axis=-1)
+        X_test = np.expand_dims(X_test, axis=-1)
 
-    # Compile model
-    model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+        # Build CNN model
+        model = models.Sequential(
+            [
+                layers.Conv2D(
+                    32, (3, 3), activation="relu", input_shape=X_train[0].shape
+                ),
+                layers.MaxPooling2D((2, 2)),
+                layers.Conv2D(64, (3, 3), activation="relu"),
+                layers.MaxPooling2D((2, 2)),
+                layers.Conv2D(128, (3, 3), activation="relu"),
+                layers.MaxPooling2D((2, 2)),
+                layers.Flatten(),
+                layers.Dense(128, activation="relu"),
+                layers.Dense(len(label_encoder.classes_), activation="softmax"),
+            ]
+        )
 
-    for i in range(10):
+        # Compile model
+        model.compile(
+            optimizer="adam",
+            loss="sparse_categorical_crossentropy",
+            metrics=["accuracy"],
+        )
+
+        return model
+
+    def train(self, epochs=10, batch_size=32):
+        # Load data
+        X, y = load_data(self.data_path)
+
+        # Encode labels
+        label_encoder = LabelEncoder()
+        y_encoded = label_encoder.fit_transform(y)
+
+        # Split data into training and test sets
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y_encoded, test_size=0.2, random_state=42
+        )
+
+        # Add channel dimension for CNN
+        X_train = np.expand_dims(X_train, axis=-1)
+        X_test = np.expand_dims(X_test, axis=-1)
+
         # Train model
-        model.fit(X_train, y_train, epochs=10, batch_size=32, validation_data=(X_test, y_test))
+        self.model.fit(
+            X_train,
+            y_train,
+            epochs=epochs,
+            batch_size=batch_size,
+            validation_data=(X_test, y_test),
+        )
+
+    def evaluate(self):
+        # Load data
+        X, y = load_data(self.data_path)
+
+        # Encode labels
+        label_encoder = LabelEncoder()
+        y_encoded = label_encoder.fit_transform(y)
+
+        # Split data into training and test sets
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y_encoded, test_size=0.2, random_state=42
+        )
+
+        # Add channel dimension for CNN
+        X_train = np.expand_dims(X_train, axis=-1)
+        X_test = np.expand_dims(X_test, axis=-1)
 
         # Evaluate model
-        test_loss, test_acc = model.evaluate(X_test, y_test)
+        test_loss, test_acc = self.model.evaluate(X_test, y_test)
         print(f"Test accuracy: {test_acc}")
 
-    # Save the model
-    model.save("speaker_identification_model.h5")
+    def save_model(self, file_path="speaker_identification_model.h5"):
+        self.model.save(file_path)
 
 
 def save_file(input_file, person_name):
@@ -126,16 +208,15 @@ def save_file(input_file, person_name):
         # Calculate the start and end time of the segment
         start_time = i * segment_duration
         end_time = (i + 1) * segment_duration
-        
+
         # Extract the segment
         segment = audio[start_time:end_time]
-        
+
         # Save the segment to a new .wav file
         output_file = os.path.join(output_folder, f"{i}.wav")
         segment.export(output_file, format="wav")
 
     print(f"Split {input_file} into {num_segments} segments in {output_folder}.")
-
 
 
 def save_file_test(input_file, person_name):
@@ -162,11 +243,11 @@ def save_file_test(input_file, person_name):
         # Calculate the start and end time of the segment
         start_time = i * segment_duration
         end_time = (i + 1) * segment_duration
-        
+
         # Extract the segment
         segment = audio[start_time:end_time]
 
-        if i==0:
+        if i == 0:
 
             # Save the segment to a new .wav file
             output_file = os.path.join(output_folder, f"{i}.wav")
@@ -174,7 +255,44 @@ def save_file_test(input_file, person_name):
 
         break
 
- 
+
+def predict_person():
+
+    # Load the saved model
+    model = load_model("speaker_identification_model.h5")
+
+    # Function to extract spectrogram features from audio file
+    def extract_features(file_path, n_mels=128, n_fft=2048, hop_length=512):
+        signal, sr = librosa.load(file_path, sr=None)
+        mel_spec = librosa.feature.melspectrogram(
+            y=signal, sr=sr, n_fft=n_fft, hop_length=hop_length, n_mels=n_mels
+        )
+        log_mel_spec = librosa.power_to_db(mel_spec, ref=np.max)
+        return log_mel_spec
+
+    # Example audio file for prediction
+    sample_file_path = "test/0.wav"
+    sample_features = extract_features(sample_file_path)
+    sample_features = np.expand_dims(
+        sample_features, axis=-1
+    )  # Add channel dimension for CNN
+    sample_features = np.expand_dims(sample_features, axis=0)  # Add batch dimension
+
+    # Make prediction
+    predictions = model.predict(sample_features)
+    predicted_speaker_index = np.argmax(predictions)
+    print(predictions)
+    # Load data
+    data_path = "samples"
+    X, y = load_data(data_path)
+
+    # Encode labels
+    label_encoder = LabelEncoder()
+    y_encoded = label_encoder.fit_transform(y)
+    predicted_speaker = label_encoder.inverse_transform([predicted_speaker_index])[0]
+    print("Predicted Speaker:", predicted_speaker)
+    return predicted_speaker
+
 
 @app.post("/record_audio_train")
 async def record_audio_train(
@@ -189,13 +307,12 @@ async def record_audio_train(
             print(file_content)
             f.write(file_content)
             f.close()
-        
+
         save_file(file_path, person_name)
 
         return {"message": "File saved successfully"}
     except Exception as e:
         return {"message": e.args}
-
 
 
 @app.post("/record_audio_test")
@@ -205,12 +322,22 @@ async def record_audio_train(
 ):
     print(person_name)
     try:
+
+        # Save the file as sample.wav file.
         file_path = f"testing_set/sample.wav"
+
+        # Write the file content to the sample.wav file.
         with open(file_path, "wb") as f:
+
+            # Read the file content.
             file_content = await file.read()
             print(file_content)
             f.write(file_content)
+
+            # Close the file.
             f.close()
+
+        # Save the file.
         save_file_test(file_path, person_name)
         return {"message": "File saved successfully"}
     except Exception as e:
@@ -219,49 +346,18 @@ async def record_audio_train(
 
 @app.post("/train_model")
 async def train_model_():
-    train_model()
+
+    # Usage
+    model = SpeakerIdentificationModel()
+    model.train()
+    model.evaluate()
+    model.save_model()
     return {"message": "Model trained successfully"}
 
-
-def predict_person():
-    from tensorflow.keras.models import load_model
-    import librosa
-    import numpy as np
-
-    # Load the saved model
-    model = load_model('speaker_identification_model.h5')
-
-    # Function to extract spectrogram features from audio file
-    def extract_features(file_path, n_mels=128, n_fft=2048, hop_length=512):
-        signal, sr = librosa.load(file_path, sr=None)
-        mel_spec = librosa.feature.melspectrogram(y=signal, sr=sr, n_fft=n_fft, hop_length=hop_length, n_mels=n_mels)
-        log_mel_spec = librosa.power_to_db(mel_spec, ref=np.max)
-        return log_mel_spec
-
-    # Example audio file for prediction
-    sample_file_path = "test/0.wav"
-    sample_features = extract_features(sample_file_path)
-    sample_features = np.expand_dims(sample_features, axis=-1)  # Add channel dimension for CNN
-    sample_features = np.expand_dims(sample_features, axis=0)   # Add batch dimension
-
-    # Make prediction
-    predictions = model.predict(sample_features)
-    predicted_speaker_index = np.argmax(predictions)
-    print(predictions)
-     # Load data
-    data_path = "samples"
-    X, y = load_data(data_path)
-
-    # Encode labels
-    label_encoder = LabelEncoder()
-    y_encoded = label_encoder.fit_transform(y)
-    predicted_speaker = label_encoder.inverse_transform([predicted_speaker_index])[0]
-    print("Predicted Speaker:", predicted_speaker)
-    return predicted_speaker
 
 @app.post("/test_model")
 async def predict_person_():
 
-    predicted_person=predict_person()
+    predicted_person = predict_person()
 
     return {"speaker": predicted_person}
